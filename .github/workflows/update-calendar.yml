@@ -1,0 +1,171 @@
+name: Update Forex Factory Calendar
+
+on:
+  schedule:
+    - cron: "15 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-calendar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build calendar
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+          from datetime import datetime, timezone, timedelta
+          from pathlib import Path
+          import hashlib
+          import html
+
+          SOURCE = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+
+          # Match the currencies selected in your Forex Factory calendar.
+          CURRENCIES = {
+              "AUD", "CAD", "CHF", "CNY",
+              "EUR", "GBP", "JPY", "NZD", "USD"
+          }
+
+          # Forex Factory High Impact events only.
+          IMPACT = "High"
+
+          url = SOURCE
+
+          request = urllib.request.Request(
+              url,
+              headers={"User-Agent": "Mozilla/5.0"}
+          )
+
+          with urllib.request.urlopen(request, timeout=30) as response:
+              data = json.loads(response.read().decode("utf-8"))
+
+          events = []
+
+          for event in data:
+              country = event.get("country", "")
+              impact = event.get("impact", "")
+              title = event.get("title", "")
+              date_text = event.get("date", "")
+
+              if country not in CURRENCIES:
+                  continue
+
+              if impact != IMPACT:
+                  continue
+
+              if not date_text or not title:
+                  continue
+
+              try:
+                  dt = datetime.fromisoformat(
+                      date_text.replace("Z", "+00:00")
+                  )
+              except Exception:
+                  continue
+
+              if dt.tzinfo is None:
+                  dt = dt.replace(tzinfo=timezone.utc)
+
+              dt = dt.astimezone(timezone.utc)
+
+              uid_source = f"{country}|{title}|{dt.isoformat()}"
+              uid = hashlib.sha256(
+                  uid_source.encode("utf-8")
+              ).hexdigest()[:32]
+
+              description_parts = []
+
+              if event.get("forecast"):
+                  description_parts.append(
+                      f"Forecast: {event['forecast']}"
+                  )
+
+              if event.get("previous"):
+                  description_parts.append(
+                      f"Previous: {event['previous']}"
+                  )
+
+              description = "\\n".join(description_parts)
+
+              events.append({
+                  "uid": uid,
+                  "country": country,
+                  "title": title,
+                  "datetime": dt,
+                  "description": description
+              })
+
+          events.sort(key=lambda x: x["datetime"])
+
+          # Create the ICS calendar.
+          lines = [
+              "BEGIN:VCALENDAR",
+              "VERSION:2.0",
+              "PRODID:-//Rhenay//Forex Factory High Impact Calendar//EN",
+              "CALSCALE:GREGORIAN",
+              "METHOD:PUBLISH",
+              "X-WR-CALNAME:Forex Factory - High Impact News",
+              "X-WR-CALDESC:Forex Factory high-impact economic announcements",
+              "X-WR-TIMEZONE:UTC"
+          ]
+
+          def escape_ics(value):
+              value = str(value)
+              value = value.replace("\\", "\\\\")
+              value = value.replace(";", "\\;")
+              value = value.replace(",", "\\,")
+              value = value.replace("\r\n", "\\n")
+              value = value.replace("\n", "\\n")
+              return value
+
+          for event in events:
+              dt = event["datetime"].strftime("%Y%m%dT%H%M%SZ")
+
+              lines.extend([
+                  "BEGIN:VEVENT",
+                  f"UID:{event['uid']}@forex-news-calendar",
+                  f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+                  f"DTSTART:{dt}",
+                  f"DTEND:{(event['datetime'] + timedelta(minutes=15)).strftime('%Y%m%dT%H%M%SZ')}",
+                  f"SUMMARY:🔴 {event['country']} - {escape_ics(event['title'])}"
+              ])
+
+              if event["description"]:
+                  lines.append(
+                      f"DESCRIPTION:{escape_ics(event['description'])}"
+                  )
+
+              lines.append("END:VEVENT")
+
+          lines.append("END:VCALENDAR")
+
+          Path("docs").mkdir(exist_ok=True)
+
+          Path("docs/forex-high-impact.ics").write_text(
+              "\r\n".join(lines) + "\r\n",
+              encoding="utf-8"
+          )
+
+          print(f"Created calendar with {len(events)} high-impact events.")
+          PY
+
+      - name: Commit calendar
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/forex-high-impact.ics
+          git diff --cached --quiet || git commit -m "Update Forex Factory high-impact calendar"
+          git push
