@@ -140,7 +140,7 @@ jobs:
                   f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
                   f"DTSTART:{dt}",
                   f"DTEND:{(event['datetime'] + timedelta(minutes=15)).strftime('%Y%m%dT%H%M%SZ')}",
-                  f"SUMMARY:🔴 {event['country']} - {escape_ics(event['title'])}"
+                 f"SUMMARY:🔴 {event['country']} {escape_ics(event['title'])}"
               ])
 
               if event["description"]:
